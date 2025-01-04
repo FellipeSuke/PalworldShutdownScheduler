@@ -13,7 +13,7 @@ class PalworldShutdownScheduler
     public static string contato = "120363295786838904@g.us";
     static async Task Main(string[] args)
     {
-        Console.WriteLine("[INFO] Inicializando o Agendador de Shutdown...");
+        Console.WriteLine($"{DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")}[INFO] Inicializando o Agendador de Shutdown...");
 
         var servers = LoadServerConfigurations();
 
@@ -36,7 +36,7 @@ class PalworldShutdownScheduler
             ScheduleShutdowns(server);
         }
 
-        Console.WriteLine("[INFO] Agendador configurado. Pressione Ctrl+C para sair.");
+        Console.WriteLine($"{DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")}[INFO] Agendador configurado. Pressione Ctrl+C para sair.");
 
         // Aguardar indefinidamente para manter o container ativo
         while (true)
@@ -68,7 +68,7 @@ class PalworldShutdownScheduler
             });
         }
 
-        Console.WriteLine($"[INFO] {servers.Count} servidores configurados.");
+        Console.WriteLine($$"{DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")}[INFO] {servers.Count} servidores configurados.");
         return servers;
     }
 
@@ -112,11 +112,11 @@ class PalworldShutdownScheduler
                 };
                 newTimer.Start();
 
-                Console.WriteLine($"[INFO] Shutdown reagendado para o servidor '{server.Name}' às {nextDay}.");
+                Console.WriteLine($$"{DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")}[INFO] Shutdown reagendado para o servidor '{server.Name}' às {nextDay}.");
             };
 
             timer.Start();
-            Console.WriteLine($"[INFO] Shutdown agendado para o servidor '{server.Name}' às {schedule}.");
+            Console.WriteLine($$"{DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")}[INFO] Shutdown agendado para o servidor '{server.Name}' às {schedule}.");
         }
     }
 
