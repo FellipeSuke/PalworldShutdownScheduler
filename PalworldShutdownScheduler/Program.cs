@@ -106,7 +106,7 @@ class PalworldShutdownScheduler
 
             timer.Start();
             Console.WriteLine($"[INFO] Shutdown agendado para o servidor '{server.Name}' às {schedule}.");
-            EnviarMensagemWhatsApp($"Shutdown agendado para o servidor '{server.Name}' às {schedule}.", contato);
+            
         }
     }
 
@@ -128,10 +128,12 @@ class PalworldShutdownScheduler
             if (response.IsSuccessStatusCode)
             {
                 Console.WriteLine("Reinício solicitado com sucesso.");
+                EnviarMensagemWhatsApp($"⚠ Solicitando reinício para {server.Name} as {DateTime.Now}. ⚠",contato);
             }
             else
             {
                 Console.WriteLine($"Falha ao solicitar reinício. Status: {response.StatusCode}");
+                EnviarMensagemWhatsApp($"🛑 Falha ao solicitar reinício para {server.Name} as {DateTime.Now}. 🛑", contato);
             }
         }
     }
