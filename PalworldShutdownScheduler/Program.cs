@@ -16,14 +16,33 @@ class PalworldShutdownScheduler
         Console.WriteLine("[INFO] Inicializando o Agendador de Shutdown...");
 
         var servers = LoadServerConfigurations();
+
+        // Adiciona servidor local para debug
+        //servers.Add(new ServerConfig
+        //{
+        //    Name = "Local Debug Server",
+        //    ApiUrl = "http://localhost:8212/v1/api/shutdown",
+        //    Username = "admin",
+        //    Password = "joga10",
+        //    ScheduleTimes = new List<TimeSpan> { TimeSpan.Parse("21:17"), TimeSpan.Parse("21:18") },
+        //    ShutdownMessage = "Teste de desligamento local",
+        //    WaitTimeMinutes = 30
+        //});
+
         foreach (var server in servers)
         {
             ScheduleShutdowns(server);
         }
 
-        Console.WriteLine("[INFO] Agendador configurado. Pressione Enter para sair.");
-        Console.ReadLine();
+        Console.WriteLine("[INFO] Agendador configurado. Pressione Ctrl+C para sair.");
+
+        // Aguardar indefinidamente para manter o container ativo
+        while (true)
+        {
+            await Task.Delay(10000);  // Delay para não sobrecarregar o CPU, você pode ajustar o tempo.
+        }
     }
+
 
     private static List<ServerConfig> LoadServerConfigurations()
     {
@@ -73,8 +92,16 @@ class PalworldShutdownScheduler
 
             timer.Elapsed += async (sender, e) =>
             {
+                timer.Stop(); // Para garantir que não será chamado novamente
                 await PerformShutdown(server);
-                ScheduleShutdowns(server); // Reagendar para o próximo dia
+
+                // Reagendar para o próximo dia
+                var nextDay = schedule.AddDays(1);
+                var newTimer = new System.Timers.Timer((nextDay - DateTime.Now).TotalMilliseconds) { AutoReset = false };
+                newTimer.Elapsed += async (s, evt) => await PerformShutdown(server);
+                newTimer.Start();
+
+                Console.WriteLine($"[INFO] Shutdown reagendado para o servidor '{server.Name}' às {nextDay}.");
             };
 
             timer.Start();
@@ -85,33 +112,30 @@ class PalworldShutdownScheduler
 
     private static async Task PerformShutdown(ServerConfig server)
     {
-        try
+        using (HttpClient client = new HttpClient())
         {
-            var request = new HttpRequestMessage(HttpMethod.Post, server.ApiUrl);
-            request.Headers.Add("Authorization", server.Password);
+            string url = $"{server.ApiUrl}";
+            Console.WriteLine($"{server.WaitTimeMinutes}    {server.ShutdownMessage}");
+            var content = new StringContent($"{{\"waittime\": {server.WaitTimeMinutes}, \"message\": \"{server.ShutdownMessage}\"}}", Encoding.UTF8, "application/json");
 
-            var shutdownMessage = new
+            // Codifica o usuário e senha em Base64 para a autenticação Basic
+            string authInfo = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{server.Username}:{server.Password}"));
+            client.DefaultRequestHeaders.Add("Authorization", $"Basic {authInfo}");
+
+            // Envia a requisição POST
+            HttpResponseMessage response = await client.PostAsync(url, content);
+
+            if (response.IsSuccessStatusCode)
             {
-                waittime = server.WaitTimeMinutes,
-                message = server.ShutdownMessage ?? "Desligamento para atualização de Config em 5 min"
-            };
-
-            var content = new StringContent(JsonSerializer.Serialize(shutdownMessage), Encoding.UTF8, "application/json");
-            request.Content = content;
-
-            Console.WriteLine($"[INFO] Enviando requisição de shutdown para '{server.Name}'...");
-            EnviarMensagemWhatsApp($"Desligamento para atualização de Config em {server.WaitTimeMinutes} min", contato);
-            var response = await HttpClient.SendAsync(request);
-
-            response.EnsureSuccessStatusCode();
-            Console.WriteLine($"[SUCESSO] Shutdown realizado com sucesso no servidor '{server.Name}': {await response.Content.ReadAsStringAsync()}.");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[EXCEÇÃO] Erro ao realizar shutdown no servidor '{server.Name}': {ex.Message}");
-            EnviarMensagemWhatsApp($"Erro ao realizar shutdown no servidor '{server.Name}': {ex.Message}", contato);
+                Console.WriteLine("Reinício solicitado com sucesso.");
+            }
+            else
+            {
+                Console.WriteLine($"Falha ao solicitar reinício. Status: {response.StatusCode}");
+            }
         }
     }
+
     static async System.Threading.Tasks.Task EnviarMensagemWhatsApp(string mensagem, string contato)
     {
         // Implementar a lógica para enviar mensagem via WhatsApp aqui
@@ -137,6 +161,5 @@ class PalworldShutdownScheduler
         public string ShutdownMessage { get; set; }
         public int WaitTimeMinutes { get; set; }
     }
-
 
 }
