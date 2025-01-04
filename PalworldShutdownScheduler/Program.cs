@@ -22,9 +22,11 @@ class PalworldShutdownScheduler
         //{
         //    Name = "Local Debug Server",
         //    ApiUrl = "http://localhost:8212/v1/api/shutdown",
+        //    Host = "192.168.100.110",
+        //    RconPort = "25575",
         //    Username = "admin",
         //    Password = "joga10",
-        //    ScheduleTimes = new List<TimeSpan> { TimeSpan.Parse("21:17"), TimeSpan.Parse("21:18") },
+        //    ScheduleTimes = new List<TimeSpan> { TimeSpan.Parse("23:54"), TimeSpan.Parse("23:55") },
         //    ShutdownMessage = "Teste de desligamento local",
         //    WaitTimeMinutes = 30
         //});
@@ -55,8 +57,10 @@ class PalworldShutdownScheduler
             servers.Add(new ServerConfig
             {
                 Name = Environment.GetEnvironmentVariable($"Nome_Server_{i}"),
+                Host = server,
                 ApiUrl = $"http://{server}:{Environment.GetEnvironmentVariable($"API_PORT_{i}")}/v1/api/shutdown",
                 Username = Environment.GetEnvironmentVariable($"API_USER_{i}"),
+                RconPort = Environment.GetEnvironmentVariable($"RCON_PORT_{i}"),
                 Password = Environment.GetEnvironmentVariable($"API_PASSWORD_{i}"),
                 ScheduleTimes = ParseScheduleTimes(Environment.GetEnvironmentVariable($"SCHEDULE_TIMES_{i}")),
                 ShutdownMessage = Environment.GetEnvironmentVariable($"SHUTDOWN_MESSAGE_{i}"),
@@ -93,12 +97,19 @@ class PalworldShutdownScheduler
             timer.Elapsed += async (sender, e) =>
             {
                 timer.Stop(); // Para garantir que não será chamado novamente
-                await PerformShutdown(server);
+
+                // Chama tanto a API quanto o RCON
+                await PerformShutdownApi(server);
+                await PerformShutdownGameRcon(server);
 
                 // Reagendar para o próximo dia
                 var nextDay = schedule.AddDays(1);
                 var newTimer = new System.Timers.Timer((nextDay - DateTime.Now).TotalMilliseconds) { AutoReset = false };
-                newTimer.Elapsed += async (s, evt) => await PerformShutdown(server);
+                newTimer.Elapsed += async (s, evt) =>
+                {
+                    await PerformShutdownApi(server);
+                    await PerformShutdownGameRcon(server);
+                };
                 newTimer.Start();
 
                 Console.WriteLine($"[INFO] Shutdown reagendado para o servidor '{server.Name}' às {nextDay}.");
@@ -106,11 +117,11 @@ class PalworldShutdownScheduler
 
             timer.Start();
             Console.WriteLine($"[INFO] Shutdown agendado para o servidor '{server.Name}' às {schedule}.");
-            
         }
     }
 
-    private static async Task PerformShutdown(ServerConfig server)
+
+    private static async Task PerformShutdownApi(ServerConfig server)
     {
         using (HttpClient client = new HttpClient())
         {
@@ -138,6 +149,41 @@ class PalworldShutdownScheduler
         }
     }
 
+
+private static async Task PerformShutdownGameRcon(ServerConfig server)
+{
+    using (HttpClient client = new HttpClient())
+    {
+        string url = "http://192.168.100.84:8444/rcon";  // URL do servidor RCON
+        Console.WriteLine($"Iniciando shutdown para o servidor '{server.Name}'...");
+
+        // Substituindo as variáveis no conteúdo com base no servidor
+        var content = new StringContent(
+            $"{{\n    \"host\": \"{server.Host}\",\n    \"port\": {server.RconPort},\n    \"password\": \"{server.Password}\",\n    \"command\": \"Shutdown {server.WaitTimeMinutes} {server.ShutdownMessage}\"\n}}", 
+            null, "application/json");
+
+        client.DefaultRequestHeaders.Add("X-API-Key", "joga10");  // Definir a chave de API
+
+        try
+        {
+            HttpResponseMessage response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, url) { Content = content });
+
+            response.EnsureSuccessStatusCode();  // Garante que a resposta seja bem-sucedida
+
+            Console.WriteLine($"Reinício solicitado com sucesso via RCON. resposta: {response.Content}");
+            
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Erro ao solicitar reinício via RCON: {ex.Message}");
+            
+        }
+    }
+}
+
+
+
+
     static async System.Threading.Tasks.Task EnviarMensagemWhatsApp(string mensagem, string contato)
     {
         // Implementar a lógica para enviar mensagem via WhatsApp aqui
@@ -156,7 +202,9 @@ class PalworldShutdownScheduler
     private class ServerConfig
     {
         public string Name { get; set; }
+        public string Host { get; set; }
         public string ApiUrl { get; set; }
+        public string RconPort { get; set; }
         public string Username { get; set; }
         public string Password { get; set; }
         public List<TimeSpan> ScheduleTimes { get; set; } = new List<TimeSpan>();
