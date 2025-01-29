@@ -4,16 +4,17 @@ using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
-using System.Timers;
 
 class PalworldShutdownScheduler
 {
     private static readonly HttpClient HttpClient = new HttpClient();
     public static string contato = "120363295786838904@g.us";
+
     static async Task Main(string[] args)
     {
-        Console.WriteLine($"{DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")} [INFO] Inicializando o Agendador de Shutdown...");
+        Console.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [INFO] Inicializando o Agendador de Shutdown...");
 
         var servers = LoadServerConfigurations();
 
@@ -26,25 +27,34 @@ class PalworldShutdownScheduler
         //    RconPort = "25575",
         //    Username = "admin",
         //    Password = "joga10",
-        //    ScheduleTimes = new List<TimeSpan> { TimeSpan.Parse("23:54"), TimeSpan.Parse("23:55") },
+        //    ScheduleTimes = new List<TimeSpan> { TimeSpan.Parse("22:54"), TimeSpan.Parse("22:56") },
         //    ShutdownMessage = "Teste de desligamento local",
         //    WaitTimeMinutes = 30
         //});
+
 
         foreach (var server in servers)
         {
             ScheduleShutdowns(server);
         }
 
-        Console.WriteLine($"{DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")}[INFO] Agendador configurado. Pressione Ctrl+C para sair.");
+        Console.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [INFO] Agendador configurado. Pressione Ctrl+C para sair.");
 
-        // Aguardar indefinidamente para manter o container ativo
-        while (true)
+        // Definir um CancellationToken para limitar a execução a 4 horas
+        using (var cts = new CancellationTokenSource(TimeSpan.FromHours(4)))
         {
-            await Task.Delay(10000);  // Delay para não sobrecarregar o CPU, você pode ajustar o tempo.
+            var delayTask = Task.Delay(Timeout.Infinite, cts.Token);
+            try
+            {
+                await delayTask;
+            }
+            catch (TaskCanceledException)
+            {
+                Console.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [INFO] Tempo limite atingido. Encerrando...");
+                Environment.Exit(0); // Encerra o container Docker corretamente
+            }
         }
     }
-
 
     private static List<ServerConfig> LoadServerConfigurations()
     {
@@ -68,7 +78,7 @@ class PalworldShutdownScheduler
             });
         }
 
-        Console.WriteLine($"{DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")} [INFO] {servers.Count} servidores configurados.");
+        Console.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [INFO] {servers.Count} servidores configurados.");
         return servers;
     }
 
@@ -96,13 +106,11 @@ class PalworldShutdownScheduler
 
             timer.Elapsed += async (sender, e) =>
             {
-                timer.Stop(); // Para garantir que não será chamado novamente
+                timer.Stop();
 
-                // Chama tanto a API quanto o RCON
                 await PerformShutdownApi(server);
                 await PerformShutdownGameRcon(server);
 
-                // Reagendar para o próximo dia
                 var nextDay = schedule.AddDays(1);
                 var newTimer = new System.Timers.Timer((nextDay - DateTime.Now).TotalMilliseconds) { AutoReset = false };
                 newTimer.Elapsed += async (s, evt) =>
@@ -112,90 +120,100 @@ class PalworldShutdownScheduler
                 };
                 newTimer.Start();
 
-                Console.WriteLine($"{DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")} [INFO] Shutdown reagendado para o servidor '{server.Name}' às {nextDay}.");
+                Console.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [INFO] Shutdown reagendado para '{server.Name}' às {nextDay}.");
             };
 
             timer.Start();
-            Console.WriteLine($"{DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")} [INFO] Shutdown agendado para o servidor '{server.Name}' às {schedule}.");
+            Console.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [INFO] Shutdown agendado para '{server.Name}' às {schedule}.");
         }
     }
-
 
     private static async Task PerformShutdownApi(ServerConfig server)
     {
-        using (HttpClient client = new HttpClient())
+        using (HttpClient client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) }) // Define um timeout de 30s
         {
-            string url = $"{server.ApiUrl}";
-            Console.WriteLine($"{server.WaitTimeMinutes}    {server.ShutdownMessage}");
-            var content = new StringContent($"{{\"waittime\": {server.WaitTimeMinutes}, \"message\": \"{server.ShutdownMessage}\"}}", Encoding.UTF8, "application/json");
+            string url = server.ApiUrl;
 
-            // Codifica o usuário e senha em Base64 para a autenticação Basic
+            var content = new StringContent(
+                $"{{\"waittime\": {server.WaitTimeMinutes}, \"message\": \"{server.ShutdownMessage}\"}}",
+                Encoding.UTF8, "application/json");
+
             string authInfo = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{server.Username}:{server.Password}"));
             client.DefaultRequestHeaders.Add("Authorization", $"Basic {authInfo}");
 
-            // Envia a requisição POST
-            HttpResponseMessage response = await client.PostAsync(url, content);
+            try
+            {
+                HttpResponseMessage response = await client.PostAsync(url, content);
 
-            if (response.IsSuccessStatusCode)
-            {
-                Console.WriteLine("Reinício solicitado com sucesso.");
-                EnviarMensagemWhatsApp($"⚠ Solicitando reinício para {server.Name} as {DateTime.Now}. ⚠",contato);
+                if (response.IsSuccessStatusCode)
+                {
+                    Console.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [INFO] Reinício solicitado com sucesso para {server.Name}.");
+                    await EnviarMensagemWhatsApp($"⚠ Solicitando reinício para {server.Name} às {DateTime.Now}. ⚠", contato);
+                }
+                else
+                {
+                    string errorMessage = await response.Content.ReadAsStringAsync();
+                    Console.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [ERRO] Falha ao solicitar reinício para {server.Name}. Status: {response.StatusCode}. Detalhes: {errorMessage}");
+                    await EnviarMensagemWhatsApp($"🛑 Falha ao solicitar reinício para {server.Name} às {DateTime.Now}. 🛑", contato);
+                }
             }
-            else
+            catch (TaskCanceledException ex) when (!ex.CancellationToken.IsCancellationRequested)
             {
-                Console.WriteLine($"Falha ao solicitar reinício. Status: {response.StatusCode}");
-                EnviarMensagemWhatsApp($"🛑 Falha ao solicitar reinício para {server.Name} as {DateTime.Now}. 🛑", contato);
+                Console.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [ERRO] Timeout ao tentar reiniciar {server.Name}. URL: {url}");
+                await EnviarMensagemWhatsApp($"🛑 Timeout ao solicitar reinício para {server.Name}. 🛑", contato);
+            }
+            catch (HttpRequestException ex)
+            {
+                Console.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [ERRO] Erro de rede ao tentar reiniciar {server.Name}. Detalhes: {ex.Message}");
+                await EnviarMensagemWhatsApp($"🛑 Erro de rede ao solicitar reinício para {server.Name}. 🛑", contato);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [ERRO] Erro inesperado ao tentar reiniciar {server.Name}. Detalhes: {ex.Message}");
+                await EnviarMensagemWhatsApp($"🛑 Erro inesperado ao solicitar reinício para {server.Name}. 🛑", contato);
             }
         }
     }
 
 
-private static async Task PerformShutdownGameRcon(ServerConfig server)
-{
-    using (HttpClient client = new HttpClient())
+    private static async Task PerformShutdownGameRcon(ServerConfig server)
     {
-        string url = "http://192.168.100.84:8444/rcon";  // URL do servidor RCON
-        Console.WriteLine($"Iniciando shutdown para o servidor '{server.Name}'...");
-
-        // Substituindo as variáveis no conteúdo com base no servidor
-        var content = new StringContent(
-            $"{{\n    \"host\": \"{server.Host}\",\n    \"port\": {server.RconPort},\n    \"password\": \"{server.Password}\",\n    \"command\": \"Shutdown {server.WaitTimeMinutes} {server.ShutdownMessage}\"\n}}", 
-            null, "application/json");
-
-        client.DefaultRequestHeaders.Add("X-API-Key", "joga10");  // Definir a chave de API
-
-        try
+        using (HttpClient client = new HttpClient())
         {
-            HttpResponseMessage response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, url) { Content = content });
+            string url = "http://192.168.100.84:8444/rcon";
 
-            response.EnsureSuccessStatusCode();  // Garante que a resposta seja bem-sucedida
+            var content = new StringContent(
+                $"{{ \"host\": \"{server.Host}\", \"port\": {server.RconPort}, \"password\": \"{server.Password}\", \"command\": \"Shutdown {server.WaitTimeMinutes} {server.ShutdownMessage}\" }}",
+                Encoding.UTF8, "application/json");
 
-            Console.WriteLine($"Reinício solicitado com sucesso via RCON. resposta: {response.Content}");
-            
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Erro ao solicitar reinício via RCON: {ex.Message}");
-            
+            client.DefaultRequestHeaders.Add("X-API-Key", "joga10");
+
+            try
+            {
+                HttpResponseMessage response = await client.PostAsync(url, content);
+                response.EnsureSuccessStatusCode();
+
+                Console.WriteLine($"Reinício solicitado com sucesso via RCON.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Erro ao solicitar reinício via RCON: {ex.Message}");
+            }
         }
     }
-}
 
-
-
-
-    static async System.Threading.Tasks.Task EnviarMensagemWhatsApp(string mensagem, string contato)
+    static async Task EnviarMensagemWhatsApp(string mensagem, string contato)
     {
-        // Implementar a lógica para enviar mensagem via WhatsApp aqui
         var client = new HttpClient();
         var request = new HttpRequestMessage(HttpMethod.Post, "http://sukeserver.ddns.net:3000/client/sendMessage/suke");
         request.Headers.Add("x-api-key", "SukeApiWhatsApp");
-        var content = new StringContent("{" + $"\r\n  \"chatId\": \"{contato}\",\r\n  \"contentType\": \"string\",\r\n  \"content\": \"{mensagem}\"\r\n" + "}", null, "application/json");
+        var content = new StringContent(
+            $"{{\"chatId\": \"{contato}\", \"contentType\": \"string\", \"content\": \"{mensagem}\"}}",
+            Encoding.UTF8, "application/json");
+
         request.Content = content;
         var response = await client.SendAsync(request);
         response.EnsureSuccessStatusCode();
-        await response.Content.ReadAsStringAsync();
-        Console.WriteLine($"Response WhatsApp: {response.StatusCode}");
         Console.WriteLine($"Mensagem enviada: {mensagem} para {contato}");
     }
 
@@ -211,5 +229,4 @@ private static async Task PerformShutdownGameRcon(ServerConfig server)
         public string ShutdownMessage { get; set; }
         public int WaitTimeMinutes { get; set; }
     }
-
 }
